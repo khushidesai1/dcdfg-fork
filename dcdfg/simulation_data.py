@@ -219,37 +219,40 @@ class SimulationDataset(Dataset):
                 f"Intervention targets file not found at {intervention_path}"
             )
 
-        if intervention_path.endswith(".pkl") or intervention_path.endswith(".npy"):
-            payload = _load_array_from_path(intervention_path)
+        if intervention_path.endswith(".pkl"):
+            intervention_targets = pickle.load(open(intervention_path, "rb"))
+        elif intervention_path.endswith(".npy"):
+            intervention_targets = np.load(intervention_path)
         else:
-            with open(intervention_path, "r") as fh:
-                payload = fh.read().strip()
+            raise ValueError(
+                f"Unsupported file extension for {intervention_path}. Expected a '.pkl' or '.npy' file."
+            )
 
         try:
-            payload = payload[self.i_dataset]
+            intervention_targets = intervention_targets[self.i_dataset]
         except (IndexError, TypeError) as exc:
             raise IndexError(
                 f"i_dataset {self.i_dataset} out of range for intervention file {intervention_path}"
             ) from exc
 
-        targets, obs_regime_size = self._parse_intervention_payload(payload)
+        targets, obs_regime_size = self._parse_intervention_payload(intervention_targets)
         return self._create_masks_and_regimes(num_samples, targets, obs_regime_size)
 
     def _parse_intervention_payload(
-        self, payload: Any
+        self, intervention_targets: Any
     ) -> tuple[list[int], int]:
         obs_regime_size = 1
-        targets = payload
+        targets = intervention_targets
 
-        if isinstance(payload, dict):
+        if isinstance(intervention_targets, dict):
             obs_regime_size = int(
-                payload.get("obs_regime_size", payload.get("obs_samples", 1))
+                intervention_targets.get("obs_regime_size", intervention_targets.get("obs_samples", 1))
             )
-            targets = payload.get(
+            targets = intervention_targets.get(
                 "targets",
-                payload.get(
+                intervention_targets.get(
                     "intervention_targets",
-                    payload.get("target_list", payload.get("targets_list")),
+                    intervention_targets.get("target_list", intervention_targets.get("targets_list")),
                 ),
             )
             if targets is None:
