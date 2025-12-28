@@ -21,6 +21,8 @@ import csv
 import os
 import pickle
 
+from typing import Any
+
 import numpy as np
 import torch
 from torch.utils.data import Dataset
@@ -59,6 +61,7 @@ class SimulationDataset(Dataset):
         i_dataset,
         intervention=True,
         data_filename=None,
+        intervention_filename=None,
         fraction_regimes_to_ignore=None,
         regimes_to_ignore=None,
         load_ignored=False,
@@ -69,6 +72,7 @@ class SimulationDataset(Dataset):
         :param boolean intervention: If True, use interventional data with interventional targets
         :param str data_filename: Optional name of the data file to load. If None, use the
                                   default 'data{i_dataset}.npy' or 'data_interv{i_dataset}.npy'.
+        :param str intervention_filename: Optional intervention target definition to synthesize masks/regimes
         :param list regimes_to_ignore: Regimes that are ignored during training
         """
         super(SimulationDataset, self).__init__()
@@ -76,6 +80,7 @@ class SimulationDataset(Dataset):
         self.i_dataset = i_dataset
         self.intervention = intervention
         self.data_filename = data_filename
+        self.intervention_filename = intervention_filename
         # load data
         all_data, all_masks, all_regimes = self.load_data()
         # index of all regimes, even if not used in the regimes_to_ignore case
@@ -170,25 +175,119 @@ class SimulationDataset(Dataset):
         # Load intervention masks and regimes
         masks = []
         if self.intervention:
-            interv_path = os.path.join(
-                self.file_path, f"intervention{self.i_dataset}.csv"
-            )
-            regimes = np.genfromtxt(
-                os.path.join(self.file_path, f"regime{self.i_dataset}.csv"),
-                delimiter=",",
-            )
-            regimes = regimes.astype(int)
+            if self.intervention_filename is not None:
+                masks, regimes = self._build_masks_from_intervention_file(data)
+            else:
+                interv_path = os.path.join(
+                    self.file_path, f"intervention{self.i_dataset}.csv"
+                )
+                regimes = np.genfromtxt(
+                    os.path.join(self.file_path, f"regime{self.i_dataset}.csv"),
+                    delimiter=",",
+                )
+                regimes = regimes.astype(int)
 
-            # read masks
-            with open(interv_path, "r") as f:
-                interventions_csv = csv.reader(f)
-                for row in interventions_csv:
-                    mask = [int(x) for x in row]
-                    masks.append(mask)
+                # read masks
+                with open(interv_path, "r") as f:
+                    interventions_csv = csv.reader(f)
+                    for row in interventions_csv:
+                        mask = [int(x) for x in row]
+                        masks.append(mask)
         else:
             regimes = np.array([0] * data.shape[0])
 
         return data, masks, regimes
+
+    def _build_masks_from_intervention_file(
+        self, data: np.ndarray
+    ) -> tuple[list[list[int]], np.ndarray]:
+        """
+        Create masks and regimes when a single intervention target file is provided.
+        The first samples are treated as observational (empty mask), the rest share the
+        same intervention targets.
+        """
+        num_samples = data.shape[0]
+        intervention_path = os.path.join(self.file_path, self.intervention_filename)
+        if not os.path.exists(intervention_path):
+            raise FileNotFoundError(
+                f"Intervention targets file not found at {intervention_path}"
+            )
+
+        if intervention_path.endswith(".pkl") or intervention_path.endswith(".npy"):
+            payload = _load_array_from_path(intervention_path)
+        else:
+            with open(intervention_path, "r") as fh:
+                payload = fh.read().strip()
+
+        targets, obs_regime_size = self._parse_intervention_payload(payload)
+        return self._create_masks_and_regimes(num_samples, targets, obs_regime_size)
+
+    def _parse_intervention_payload(
+        self, payload: Any
+    ) -> tuple[list[int], int]:
+        obs_regime_size = 1
+        targets = payload
+
+        if isinstance(payload, dict):
+            obs_regime_size = int(
+                payload.get("obs_regime_size", payload.get("obs_samples", 1))
+            )
+            targets = payload.get(
+                "targets",
+                payload.get(
+                    "intervention_targets",
+                    payload.get("target_list", payload.get("targets_list")),
+                ),
+            )
+            if targets is None:
+                raise ValueError(
+                    "Intervention payload dictionary must include target definitions."
+                )
+
+        return self._flatten_target_list(targets), obs_regime_size
+
+    def _flatten_target_list(self, target_value: Any) -> list[int]:
+        targets: list[int] = []
+
+        def _collect(entry: Any) -> None:
+            if entry is None:
+                return
+            if isinstance(entry, str):
+                for part in entry.split(","):
+                    part = part.strip()
+                    if part:
+                        targets.append(int(part))
+            elif isinstance(entry, (list, tuple, np.ndarray)):
+                for item in np.asarray(entry).reshape(-1):
+                    _collect(item)
+            else:
+                targets.append(int(entry))
+
+        _collect(target_value)
+        return targets
+
+    def _create_masks_and_regimes(
+        self, num_samples: int, targets: list[int], obs_regime_size: int
+    ) -> tuple[list[list[int]], np.ndarray]:
+        if num_samples == 0:
+            return [], np.array([], dtype=int)
+
+        obs_regime_size = max(0, min(obs_regime_size, num_samples))
+        interventional_samples = num_samples - obs_regime_size
+
+        masks: list[list[int]] = [[] for _ in range(obs_regime_size)]
+        template = targets.copy()
+        for _ in range(interventional_samples):
+            masks.append(template.copy())
+
+        regimes = np.concatenate(
+            (
+                np.zeros(obs_regime_size, dtype=int),
+                np.ones(interventional_samples, dtype=int),
+            )
+        )
+
+        return masks, regimes
 
     def convert_masks(self, idxs):
         """
