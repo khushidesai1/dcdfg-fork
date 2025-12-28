@@ -170,13 +170,7 @@ class SimulationDataset(Dataset):
 
         # Load data
         self.data_path = os.path.join(self.file_path, name_data)
-        raw_data = _load_array_from_path(self.data_path)
-        try:
-            data = raw_data[self.i_dataset]
-        except (IndexError, TypeError) as exc:
-            raise IndexError(
-                f"i_dataset {self.i_dataset} out of range for data file {self.data_path}"
-            ) from exc
+        data = _load_array_from_path(self.data_path)
 
         # Load intervention masks and regimes
         masks = []
@@ -227,14 +221,6 @@ class SimulationDataset(Dataset):
             raise ValueError(
                 f"Unsupported file extension for {intervention_path}. Expected a '.pkl' or '.npy' file."
             )
-
-        try:
-            intervention_targets = intervention_targets[self.i_dataset]
-        except (IndexError, TypeError) as exc:
-            raise IndexError(
-                f"i_dataset {self.i_dataset} out of range for intervention file {intervention_path}"
-            ) from exc
-
         targets, obs_regime_size = self._parse_intervention_payload(intervention_targets)
         return self._create_masks_and_regimes(num_samples, targets, obs_regime_size)
 
