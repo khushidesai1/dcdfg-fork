@@ -170,7 +170,13 @@ class SimulationDataset(Dataset):
 
         # Load data
         self.data_path = os.path.join(self.file_path, name_data)
-        data = _load_array_from_path(self.data_path)
+        raw_data = _load_array_from_path(self.data_path)
+        try:
+            data = raw_data[self.i_dataset]
+        except (IndexError, TypeError) as exc:
+            raise IndexError(
+                f"i_dataset {self.i_dataset} out of range for data file {self.data_path}"
+            ) from exc
 
         # Load intervention masks and regimes
         masks = []
@@ -218,6 +224,13 @@ class SimulationDataset(Dataset):
         else:
             with open(intervention_path, "r") as fh:
                 payload = fh.read().strip()
+
+        try:
+            payload = payload[self.i_dataset]
+        except (IndexError, TypeError) as exc:
+            raise IndexError(
+                f"i_dataset {self.i_dataset} out of range for intervention file {intervention_path}"
+            ) from exc
 
         targets, obs_regime_size = self._parse_intervention_payload(payload)
         return self._create_masks_and_regimes(num_samples, targets, obs_regime_size)
